@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<!-- Modell må 260119 - 12.28 - Uppdaterad Funciopnal Fix API --
+<!-- Colabfilen Gemini_textklass_web_från_fil.ipynb -->
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Textanalys - Svenska Filmomdömen</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
+        h1 { color: #333; text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; }
+        textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: none; box-sizing: border-box; font-size: 1rem; }
+        button { width: 100%; padding: 12px; background-color: #4CAF50; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 10px; transition: background 0.3s; }
+        button:hover { background-color: #45a049; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .result-box { margin-top: 20px; padding: 15px; border-radius: 6px; background-color: #f9f9f9; border: 1px solid #eee; display: none; }
+        .error-box { margin-top: 20px; padding: 15px; border-radius: 6px; background-color: #ffebee; border: 1px solid #ffcdd2; color: #b71c1c; display: none; }
+        .prob-bar-container { margin-bottom: 8px; }
+        .prob-label { font-size: 0.85rem; color: #555; display: flex; justify-content: space-between; }
+        .prob-bar { height: 8px; background-color: #e0e0e0; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+        .prob-fill { height: 100%; background-color: #2196F3; width: 0%; transition: width 0.5s ease; }
+        .highlight { font-weight: bold; font-size: 1.1rem; text-align: center; display: block; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Analysera Omdöme</h1>
+    
+    <div id="loadingStatus" style="text-align: center; color: #666; margin-bottom: 10px;">Laddar modell...</div>
+
+    <textarea id="inputText" placeholder="Skriv ditt omdöme här (t.ex. 'Vilken fantastisk film')..."></textarea>
+    <button id="analyzeBtn" onclick="predict()" disabled>Analysera Text</button>
+
+    <div id="errorBox" class="error-box"></div>
+
+    <div id="resultBox" class="result-box">
+        <span id="predictionResult" class="highlight"></span>
+        <hr style="border: 0; border-top: 1px solid #ddd; margin: 10px 0;">
+        <div id="probabilities"></div>
+    </div>
+</div>
+
+<script>
+    let model;
+    let metadata;
+
+    // --- INSTÄLLNINGAR ---
+    // Om du laddade upp hela mappen 'tfjs_model' på GitHub, ändra raden nedan till:
+    const MODEL_PATH = 'tfjs_model/';
+    //const MODEL_PATH = ''; 
+    // ---------------------
+    // Ändrad 22.20 - 260118
+    // Uppdaterad Colab-fil. Skall fixa input-length. Jaja
+
+    // Det här är ett känt och frustrerande problem som beror på en versionskrock. 
+    // Google Colab har nyligen uppdaterat till Keras 3, men TensorFlow.js förväntar sig formatet från Keras 2. 
+    // Därför "glömmer" den bort input-formen i exporten oavsett hur tydligt man skriver koden.
+    
+    async function loadModel() {
+        const statusEl = document.getElementById('loadingStatus');
+        const btn = document.getElementById('analyzeBtn');
+        const errBox = document.getElementById('errorBox');
+
+        try {
+            // Bygg sökvägar
+            // Skall ändras enligt Gemini Brute_force för versionskonfikten Keras och tensorflow
+            // 
+            //const modelUrl = MODEL_PATH + 'model.json?v=fixed2';
+            // Byt version för att tvinga cachebyte
+            //const modelUrl = MODEL_PATH + 'model.json?v=fixed3';
+            const modelUrl = MODEL_PATH + 'model.json?v=fixed5';
+            
+            // const modelUrl = MODEL_PATH + 'model.json';
+            const metadataUrl = MODEL_PATH + 'metadata.json';
+
+            console.log(`Försöker ladda modell från: ${modelUrl}`);
+
+            // 1. Ladda modellen
+            model = await tf.loadLayersModel(modelUrl);
+            
+            // 2. Ladda metadata
+            const metadataResponse = await fetch(metadataUrl);
+            if (!metadataResponse.ok) {
+                throw new Error(`Kunde inte hitta metadata.json på adressen: ${metadataUrl} (Status: ${metadataResponse.status})`);
+            }
+            metadata = await metadataResponse.json();
+
+            statusEl.innerText = "Modell redo!";
+            statusEl.style.color = "green";
+            btn.disabled = false;
+            console.log("Modell och metadata laddat.");
+
+        } catch (error) {
+            console.error(error);
+            statusEl.style.display = 'none';
+            errBox.style.display = 'block';
+            // Visa ett tydligt felmeddelande för användaren
+            errBox.innerHTML = `
+                <strong>Fel vid laddning:</strong><br>
+                ${error.message}<br><br>
+                <em>Tips: Kontrollera din GitHub-filstruktur. <br>
+                Om filerna ligger i en mapp (t.ex. 'tfjs_model'), måste du uppdatera variabeln MODEL_PATH i koden.</em>
+            `;
+        }
+    }
+
+    loadModel();
+
+    // Tokenizer-funktion
+    function tokenize(text) {
+        const words = text.toLowerCase().replace(/[.,!?;:()]/g, '').split(/\s+/);
+        const sequence = [];
+        const oovIndex = metadata.word_index[metadata.oov_token] || 1; 
+
+        words.forEach(word => {
+            if (word) {
+                const index = metadata.word_index[word];
+                sequence.push(index !== undefined ? index : oovIndex);
+            }
+        });
+        return sequence;
+    }
+
+    // Padding-funktion
+    function padSequence(sequence) {
+        const maxLen = metadata.max_length;
+        if (sequence.length > maxLen) {
+            return sequence.slice(0, maxLen);
+        } else {
+            const padCount = maxLen - sequence.length;
+            const padded = [...sequence];
+            for (let i = 0; i < padCount; i++) {
+                padded.push(0);
+            }
+            return padded;
+        }
+    }
+
+    // Prediktion
+    async function predict() {
+        const text = document.getElementById('inputText').value;
+        const resultBox = document.getElementById('resultBox');
+        const errorBox = document.getElementById('errorBox');
+        
+        errorBox.style.display = 'none';
+        
+        if (!text.trim()) {
+            alert("Skriv in text först.");
+            return;
+        }
+
+        try {
+            const sequence = tokenize(text);
+            const padded = padSequence(sequence);
+            const inputTensor = tf.tensor2d([padded], [1, metadata.max_length]);
+
+            const prediction = model.predict(inputTensor);
+            const data = await prediction.data(); 
+            
+            const maxIndex = data.indexOf(Math.max(...data));
+            const labels = metadata.labels; 
+            
+            const resultText = document.getElementById('predictionResult');
+            resultText.innerText = `Bedömning: ${labels[maxIndex].toUpperCase()}`;
+            
+            if(labels[maxIndex] === 'positiv') resultText.style.color = 'green';
+            else if(labels[maxIndex] === 'negativ') resultText.style.color = 'red';
+            else resultText.style.color = '#888';
+
+            const probContainer = document.getElementById('probabilities');
+            probContainer.innerHTML = ''; 
+            
+            labels.forEach((label, idx) => {
+                const percentage = (data[idx] * 100).toFixed(1);
+                const div = document.createElement('div');
+                div.className = 'prob-bar-container';
+                div.innerHTML = `
+                    <div class="prob-label"><span>${label}</span><span>${percentage}%</span></div>
+                    <div class="prob-bar">
+                        <div class="prob-fill" style="width: ${percentage}%; background-color: ${getColor(label)}"></div>
+                    </div>
+                `;
+                probContainer.appendChild(div);
+            });
+
+            resultBox.style.display = 'block';
+            inputTensor.dispose();
+            prediction.dispose();
+
+        } catch (err) {
+            console.error(err);
+            errorBox.style.display = 'block';
+            errorBox.innerText = "Ett fel uppstod vid analysen: " + err.message;
+        }
+    }
+
+    function getColor(label) {
+        if(label === 'positiv') return '#4CAF50';
+        if(label === 'negativ') return '#F44336';
+        return '#9E9E9E'; 
+    }
+</script>
+
+</body>
+</html>
