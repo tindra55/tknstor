@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<!-- Modell må 260119 - 12.28 - Uppdaterad Funciopnal Fix API --
+<!-- Colabfilen Textklassificering_02_större_modell_ipnyb.ipynb -->
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Textanalys - Svenska Filmomdömen</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; flex-direction: column; }
+        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
+        h1 { color: #333; text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; }
+        textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: none; box-sizing: border-box; font-size: 1rem; }
+        button { width: 100%; padding: 12px; background-color: #4CAF50; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 10px; transition: background 0.3s; }
+        button:hover { background-color: #45a049; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .result-box { margin-top: 20px; padding: 15px; border-radius: 6px; background-color: #f9f9f9; border: 1px solid #eee; display: none; }
+        .error-box { margin-top: 20px; padding: 15px; border-radius: 6px; background-color: #ffebee; border: 1px solid #ffcdd2; color: #b71c1c; display: none; }
+        .prob-bar-container { margin-bottom: 8px; }
+        .prob-label { font-size: 0.85rem; color: #555; display: flex; justify-content: space-between; }
+        .prob-bar { height: 8px; background-color: #e0e0e0; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+        .prob-fill { height: 100%; background-color: #2196F3; width: 0%; transition: width 0.5s ease; }
+        .highlight { font-weight: bold; font-size: 1.1rem; text-align: center; display: block; margin-bottom: 10px; }
+
+        /* <!-- NYTT: Footer för modellinfo --> */
+        .model-footer {
+            width: 100%;
+            max-width: 500px;
+            margin: 12px auto 24px auto;
+            padding: 14px 18px;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+            border: 1px solid #eee;
+            color: #333;
+            font-size: 0.92rem;
+            line-height: 1.35;
+        }
+        .model-footer h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.05rem;
+            color: #222;
+        }
+        .model-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 6px;
+        }
+        .kv {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px dashed #eee;
+            padding-bottom: 6px;
+        }
+        .kv:last-child { border-bottom: none; padding-bottom: 0; }
+        .k { color: #555; }
+        .v { color: #111; font-weight: 600; text-align: right; word-break: break-word; }
+        .note { margin-top: 10px; color: #666; font-size: 0.85rem; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Analysera Omdöme</h1>
+    
+    <div id="loadingStatus" style="text-align: center; color: #666; margin-bottom: 10px;">Laddar modell...</div>
+
+    <textarea id="inputText" placeholder="Skriv ditt omdöme här (t.ex. 'Axel, Vilken fantastisk film')..."></textarea>
+    <button id="analyzeBtn" onclick="predict()" disabled>Analysera Text</button>
+
+    <div id="errorBox" class="error-box"></div>
+
+    <div id="resultBox" class="result-box">
+        <span id="predictionResult" class="highlight"></span>
+        <hr style="border: 0; border-top: 1px solid #ddd; margin: 10px 0;">
+        <div id="probabilities"></div>
+    </div>
+</div>
+
+<!-- NYTT: Footer längst ned på sidan -->
+<div class="model-footer" id="modelFooter" style="display:none;">
+    <h2>Modellinformation</h2>
+    <div class="model-grid" id="modelInfoGrid"></div>
+    <div class="note" id="modelInfoNote"></div>
+</div>
+
+<script>
+    let model;
+    let metadata;
+
+    // --- INSTÄLLNINGAR ---
+    // Om du laddade upp hela mappen 'tfjs_model' på GitHub, ändra raden nedan till:
+    const MODEL_PATH = 'tfjs_model/';
+    //const MODEL_PATH = ''; 
+    // ---------------------
+    
+    async function loadModel() {
+        const statusEl = document.getElementById('loadingStatus');
+        const btn = document.getElementById('analyzeBtn');
+        const errBox = document.getElementById('errorBox');
+
+        try {
+            // Bygg sökvägar
+            const modelUrl = MODEL_PATH + 'model.json?v=fixed5';
+            const metadataUrl = MODEL_PATH + 'metadata.json';
+
+            console.log(`Försöker ladda modell från: ${modelUrl}`);
+
+            // 1. Ladda modellen
+            model = await tf.loadLayersModel(modelUrl);
+            
+            // 2. Ladda metadata
+            const metadataResponse = await fetch(metadataUrl);
+            if (!metadataResponse.ok) {
+                throw new Error(`Kunde inte hitta metadata.json på adressen: ${metadataUrl} (Status: ${metadataResponse.status})`);
+            }
+            metadata = await metadataResponse.json();
+
+            statusEl.innerText = "Modell redo!";
+            statusEl.style.color = "green";
+            btn.disabled = false;
+            console.log("Modell och metadata laddat.");
+
+            // --- NYTT: Visa modellinformation längst ned ---
+            // Försök även läsa TFJS-konverterar-info från model.json (valfritt men trevligt)
+            let modelJsonInfo = null;
+            try {
+                const mj = await fetch(modelUrl);
+                if (mj.ok) modelJsonInfo = await mj.json();
+            } catch (e) {
+                console.warn("Kunde inte läsa model.json för extra info:", e);
+            }
+            renderModelInfo(modelJsonInfo);
+            // --- SLUT NYTT ---
+
+        } catch (error) {
+            console.error(error);
+            statusEl.style.display = 'none';
+            errBox.style.display = 'block';
+            // Visa ett tydligt felmeddelande för användaren
+            errBox.innerHTML = `
+                <strong>Fel vid laddning:</strong><br>
+                ${error.message}<br><br>
+                <em>Tips: Kontrollera din GitHub-filstruktur. <br>
+                Om filerna ligger i en mapp (t.ex. 'tfjs_model'), måste du uppdatera variabeln MODEL_PATH i koden.</em>
+            `;
+        }
+    }
+
+    loadModel();
+
+    // Tokenizer-funktion
+    function tokenize(text) {
+        const words = text.toLowerCase().replace(/[.,!?;:()]/g, '').split(/\s+/);
+        const sequence = [];
+        const oovIndex = metadata.word_index[metadata.oov_token] || 1; 
+
+        words.forEach(word => {
+            if (word) {
+                const index = metadata.word_index[word];
+                sequence.push(index !== undefined ? index : oovIndex);
+            }
+        });
+        return sequence;
+    }
+
+    // Padding-funktion
+    function padSequence(sequence) {
+        const maxLen = metadata.max_length;
+        if (sequence.length > maxLen) {
+            return sequence.slice(0, maxLen);
+        } else {
+            const padCount = maxLen - sequence.length;
+            const padded = [...sequence];
+            for (let i = 0; i < padCount; i++) {
+                padded.push(0);
+            }
+            return padded;
+        }
+    }
+
+    // Prediktion
+    async function predict() {
+        const text = document.getElementById('inputText').value;
+        const resultBox = document.getElementById('resultBox');
+        const errorBox = document.getElementById('errorBox');
+        
+        errorBox.style.display = 'none';
+        
+        if (!text.trim()) {
+            alert("Skriv in text först.");
+            return;
+        }
+
+        try {
+            const sequence = tokenize(text);
+            const padded = padSequence(sequence);
+            const inputTensor = tf.tensor2d([padded], [1, metadata.max_length]);
+
+            const prediction = model.predict(inputTensor);
+            const data = await prediction.data(); 
+            
+            const maxIndex = data.indexOf(Math.max(...data));
+            const labels = metadata.labels; 
+            
+            const resultText = document.getElementById('predictionResult');
+            resultText.innerText = `Bedömning: ${labels[maxIndex].toUpperCase()}`;
+            
+            if(labels[maxIndex] === 'positiv') resultText.style.color = 'green';
+            else if(labels[maxIndex] === 'negativ') resultText.style.color = 'red';
+            else resultText.style.color = '#888';
+
+            const probContainer = document.getElementById('probabilities');
+            probContainer.innerHTML = ''; 
+            
+            labels.forEach((label, idx) => {
+                const percentage = (data[idx] * 100).toFixed(1);
+                const div = document.createElement('div');
+                div.className = 'prob-bar-container';
+                div.innerHTML = `
+                    <div class="prob-label"><span>${label}</span><span>${percentage}%</span></div>
+                    <div class="prob-bar">
+                        <div class="prob-fill" style="width: ${percentage}%; background-color: ${getColor(label)}"></div>
+                    </div>
+                `;
+                probContainer.appendChild(div);
+            });
+
+            resultBox.style.display = 'block';
+            inputTensor.dispose();
+            prediction.dispose();
+
+        } catch (err) {
+            console.error(err);
+            errorBox.style.display = 'block';
+            errorBox.innerText = "Ett fel uppstod vid analysen: " + err.message;
+        }
+    }
+
+    function getColor(label) {
+        if(label === 'positiv') return '#4CAF50';
+        if(label === 'negativ') return '#F44336';
+        return '#9E9E9E'; 
+    }
+
+    // --- NYTT: Rendera modellinfo i footern ---
+    function renderModelInfo(modelJsonInfo) {
+        const footer = document.getElementById('modelFooter');
+        const grid = document.getElementById('modelInfoGrid');
+        const note = document.getElementById('modelInfoNote');
+
+        const safe = (v) => (v === undefined || v === null || v === "") ? "—" : String(v);
+
+        const vocabSize =
+            (modelJsonInfo && modelJsonInfo.modelTopology && modelJsonInfo.modelTopology.model_config &&
+             modelJsonInfo.modelTopology.model_config.config && modelJsonInfo.modelTopology.model_config.config.layers &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1] &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1].config &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1].config.input_dim)
+            || (model && model.layers && model.layers[0] && model.layers[0].getConfig && model.layers[0].getConfig().inputDim)
+            || 1000; // fallback (du kör 1000 i exporten)
+
+        const maxLen = metadata?.max_length;
+        const labels = metadata?.labels ? metadata.labels.join(", ") : "—";
+        const tokenizerWords = metadata?.word_index ? Object.keys(metadata.word_index).length : "—";
+        const paramCount = model?.countParams ? model.countParams() : "—";
+        const layerCount = model?.layers ? model.layers.length : "—";
+        const loss = modelJsonInfo?.modelTopology?.training_config?.loss;
+        const lr = modelJsonInfo?.modelTopology?.training_config?.optimizer_config?.config?.learning_rate;
+        const generatedBy = modelJsonInfo?.generatedBy;
+        const convertedBy = modelJsonInfo?.convertedBy;
+
+        // Träningsmängd finns INTE i dina filer just nu.
+        // Stöd om du väljer att lägga till "training_samples" i metadata.json senare.
+        const trainingSamples = metadata?.training_samples; // valfritt fält (om du lägger till det)
+        const datasetName = metadata?.dataset_name;         // valfritt fält
+        const trainedAt = metadata?.trained_at;             // valfritt fält
+        const trainAcc = metadata?.train_accuracy;          // valfritt fält
+        const valAcc = metadata?.val_accuracy;              // valfritt fält
+
+        grid.innerHTML = "";
+        const rows = [
+            ["Modelltyp", "TF.js LayersModel (Sequential)"],
+            ["Input-längd (max tokens)", safe(maxLen)],
+            ["Vokabulärstorlek", safe(vocabSize)],
+            ["Labels", safe(labels)],
+            ["Antal parametrar", safe(paramCount)],
+            ["Antal lager", safe(layerCount)],
+            ["Loss", safe(loss)],
+            ["Learning rate", safe(lr)],
+            ["Export (Keras)", safe(generatedBy)],
+            ["Konverterare", safe(convertedBy)],
+            ["Träningsdataset", safe(datasetName)],
+            ["Tränad (antal datapunkter)", safe(trainingSamples)],
+            ["Tränad datum", safe(trainedAt)],
+            ["Train accuracy", safe(trainAcc)],
+            ["Val accuracy", safe(valAcc)],
+            ["Tokenizer ord i index", safe(tokenizerWords)]
+        ];
+
+        rows.forEach(([k, v]) => {
+            const div = document.createElement("div");
+            div.className = "kv";
+            div.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
+            grid.appendChild(div);
+        });
+
+        // Hjälptext om träningsdata inte finns
+        if (!trainingSamples && !datasetName && !trainedAt) {
+            note.innerHTML = `
+                Tips: Vill du visa hur många datapunkter modellen tränats på?
+                Lägg till t.ex. <span class="mono">"training_samples": 600</span> i <span class="mono">metadata.json</span>
+                (det påverkar inte modellen eller klassificeringskoden – bara visningen).
+            `;
+        } else {
+            note.innerText = "";
+        }
+
+        footer.style.display = "block";
+    }
+    // --- SLUT NYTT ---
+</script>
+
+</body>
+</html>
